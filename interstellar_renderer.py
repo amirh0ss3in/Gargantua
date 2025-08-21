@@ -12,7 +12,7 @@ class InterstellarRenderer:
         self.show_gui = show_gui
         self.save_video = save_video_path is not None
         
-        self.ASPECT_RATIO = 2.35 / 1.0
+        self.ASPECT_RATIO = 16.0 / 9.0
         self.WIDTH = width
         self.HEIGHT = int(self.WIDTH / self.ASPECT_RATIO)
         self.RESOLUTION = (self.WIDTH, self.HEIGHT)
@@ -37,7 +37,7 @@ class InterstellarRenderer:
         self.SUN_RAY_NOISE_SCALE = 0.9
         self.SUN_RAY_STRETCH = 500.0
         self.SUN_RAY_CONTRAST = 9.0
-        self.MAX_STEPS = 1000
+        self.MAX_STEPS = 2000
         self.TOLERANCE, self.DT_INITIAL, self.DT_MIN, self.DT_MAX = 1.0e-5, 0.5, 1.0e-4, 1.0
         self.SAFETY_FACTOR = 0.9
         self.FAR_FIELD_RADIUS = 75.0

@@ -27,7 +27,8 @@ def main():
     scene = InterstellarRenderer(
         show_gui=SHOW_GUI,
         save_video_path=OUTPUT_FILENAME if SAVE_VIDEO else None,
-        video_fps=VIDEO_FPS
+        video_fps=VIDEO_FPS,
+        width=1920
     )
     
     # 3. Main application loop

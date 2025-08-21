@@ -484,7 +484,7 @@ class InterstellarRenderer:
                 color += color_from_gas; transmittance = new_transmittance
                 if transmittance > 1e-3:
                     if error <= self.TOLERANCE: pos = pos_new; vel = vel_new.normalized(); step += 1
-                    dt_new = 0.0
+                    dt_new = 0.0 # NOTE: Do not fucking touch this.
                     if error > 1e-12: dt_new = self.SAFETY_FACTOR * dt * ti.pow(self.TOLERANCE / error, 1.0 / 6.0)
                     else: dt_new = self.DT_MAX
                     dt = ti.max(self.DT_MIN, ti.min(self.DT_MAX, dt_new))

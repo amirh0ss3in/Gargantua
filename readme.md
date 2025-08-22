@@ -34,6 +34,6 @@ The iconic accretion disk is a **3D Eulerian fluid simulation** running on a gri
 
 - I used ChatGPT for assisting in documenting, commenting, and standardizing the final codebase presented here, as well as for crafting cinematic effects.
 
-- There are several other optimizations possible, and I am well aware of them. However, I'm currently done with this project.
+- There are several other optimizations possible, and I am well aware of them. However, I'm currently done with this project. That said, I'm open to any contributions if you'd like to take it further.
 
 

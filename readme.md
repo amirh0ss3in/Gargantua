@@ -37,3 +37,12 @@ The iconic accretion disk is a **3D Eulerian fluid simulation** running on a gri
 - There are several other optimizations possible, and I am well aware of them. However, I'm currently done with this project. That said, I'm open to any contributions if you'd like to take it further.
 
 
+
+## Future Work & Potential Optimizations
+
+The fluid simulation is built on a robust grid-based solver, but several advanced techniques could be implemented to further improve both its performance and visual fidelity. To the best of my knowledge, the following are standard optimization approaches. Please feel free to suggest additional ones if applicable.
+
+| Optimization | Benefit 
+| :--- | :--- |
+| **Accelerated Pressure Solver** | The iterative Jacobi solver for pressure projection is simple but converges slowly. Replacing it with a [Conjugate Gradient (CG) method](https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf) would offer dramatically faster convergence, significantly reducing the time spent on the most computationally expensive part of the simulation. For the highest performance, a [Multigrid approach](https://arxiv.org/pdf/2205.09411) could be used, which is often an order of magnitude faster. Also [this paper](https://arxiv.org/abs/2505.13390v1) looks very interesting. 
+| **Sparse Grid Data Structures** | A significant portion of the 3D simulation grid is empty space. Using a sparse volumetric data structure would allow the simulation to allocate memory and perform computations only in regions that actually contain gas, drastically reducing memory footprint and computational cost for a thin accretion disk. 

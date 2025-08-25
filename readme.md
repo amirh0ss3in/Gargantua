@@ -1,8 +1,15 @@
 # Gargantua: A Cinematic Black Hole Renderer in Taichi
 
 <p align="center">
-  <img src="002200.png" alt="Preview" />
+  <a href="https://youtu.be/QyHz1xi5SOk?si=CytAMWXepjVlVXlN&t=29" target="_blank">
+    <img src="https://img.youtube.com/vi/QyHz1xi5SOk/maxresdefault.jpg" 
+         alt="Gargantua Video Preview" 
+         style="width:80%; max-width:700px; border:2px solid #ccc; border-radius:8px;" />
+    <br />
+    <strong>▶ Watch the cinematic black hole renderer in action</strong>
+  </a>
 </p>
+
 
 A real-time, cinematic renderer for a gravitationally-lensed black hole, inspired by the movie *Interstellar*. This project is built entirely in Python using the [Taichi programming language](https://www.taichi-lang.org/) to achieve high performance on the GPU.
 
@@ -46,3 +53,14 @@ The fluid simulation is built on a robust grid-based solver, but several advance
 | :--- | :--- |
 | **Accelerated Pressure Solver** | The iterative Jacobi solver for pressure projection is simple but converges slowly. Replacing it with a [Conjugate Gradient (CG) method](https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf) would offer dramatically faster convergence, significantly reducing the time spent on the most computationally expensive part of the simulation. For the highest performance, a [Multigrid approach](https://arxiv.org/pdf/2205.09411) could be used, which is often an order of magnitude faster. Also [this paper](https://arxiv.org/abs/2505.13390v1) looks very interesting. 
 | **Sparse Grid Data Structures** | A significant portion of the 3D simulation grid is empty space. Using a sparse volumetric data structure would allow the simulation to allocate memory and perform computations only in regions that actually contain gas, drastically reducing memory footprint and computational cost for a thin accretion disk. 
+
+
+## Star History
+
+<a href="https://www.star-history.com/#amirh0ss3in/Gargantua&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=amirh0ss3in/Gargantua&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=amirh0ss3in/Gargantua&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=amirh0ss3in/Gargantua&type=Date" />
+ </picture>
+</a>

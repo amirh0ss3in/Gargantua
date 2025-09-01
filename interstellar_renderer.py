@@ -3,16 +3,57 @@ import numpy as np
 import math
 import time
 import os
+import tempfile
+import hashlib
+import json
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+    _rich_available = True
+    console = Console()
+except ImportError:
+    _rich_available = False
+    class _DummyConsole:
+        def print(self, text): print(text)
+    console = _DummyConsole()
+    print("Warning: `rich` not found. Output will be plain. `pip install rich`")
+
+try:
+    from tqdm import tqdm
+    _tqdm_available = True
+except ImportError:
+    _tqdm_available = False
+    print("Warning: `tqdm` not found. Progress bar will be disabled. `pip install tqdm`")
+
+
+try:
+    import psutil
+    _psutil_available = True
+except ImportError:
+    _psutil_available = False
+    console.print("[yellow]Warning: `psutil` not found. System RAM/CPU monitoring will be disabled. `pip install psutil`[/yellow]")
+
+try:
+    from pynvml import *
+    nvmlInit()
+    _pynvml_available = True
+except (ImportError, NVMLError):
+    _pynvml_available = False
+    console.print("[yellow]Warning: `pynvml` not found or failed to initialize. NVIDIA GPU monitoring will be disabled. `pip install pynvml`[/yellow]")
+
 
 @ti.data_oriented
 class InterstellarRenderer:
-    def __init__(self, width=1200, show_gui=True, save_video_path=None, video_fps=24):
-        ti.init(arch=ti.cuda, default_fp=ti.f32)
+    def __init__(self, width=1200, show_gui=True, save_video_path=None, video_fps=24, use_caching=False):
+        
+        ti.init(arch=ti.cuda, default_fp=ti.f32, log_level=ti.WARN)
 
         self.show_gui = show_gui
         self.save_video = save_video_path is not None
-        
-        
+        self.use_caching = use_caching
+        self.frame_count = 0
         self.ASPECT_RATIO = 16.0 / 9.0
         self.WIDTH = width
         self.HEIGHT = int(self.WIDTH / self.ASPECT_RATIO)
@@ -20,13 +61,9 @@ class InterstellarRenderer:
         self.GM = 0.5
         self.SCHWARZSCHILD_RADIUS = 2.0 * self.GM
         self.HORIZON_RADIUS = self.SCHWARZSCHILD_RADIUS
-        
-        
         self.DISK_INNER_RADIUS = self.SCHWARZSCHILD_RADIUS * 2.5
         self.DISK_OUTER_RADIUS = self.SCHWARZSCHILD_RADIUS * 12.0
         self.DISK_HALF_THICKNESS = (self.DISK_OUTER_RADIUS - self.DISK_INNER_RADIUS) * 0.005
-        
-        
         self.SUN_RADIUS = 3.0
         self.SUN1_POS = ti.Vector([60.0, 10.0, -25.0])
         self.SUN1_COLOR = ti.Vector([1.0, 0.6, 0.3])
@@ -36,19 +73,13 @@ class InterstellarRenderer:
         self.SUN_BRIGHTNESS_BOOST, self.SUN_CORE_BRIGHTNESS = 2.0, 10.0
         self.SUN_GLOW_STRENGTH, self.SUN_GLOW_FALLOFF = 0.1, 0.2
         self.SUN_RAY_NOISE_SCALE, self.SUN_RAY_STRETCH, self.SUN_RAY_CONTRAST = 0.9, 500.0, 9.0
-        
-        
         self.MAX_STEPS = 2000
         self.TOLERANCE, self.DT_INITIAL, self.DT_MIN, self.DT_MAX = 1.0e-5, 0.5, 1.0e-4, 1.0
         self.SAFETY_FACTOR = 0.9
         self.FAR_FIELD_RADIUS = 75.0
-        
-        
         self.BLOOM_THRESHOLD, self.BLOOM_STRENGTH = 0.3, 0.15
-        self.ANAMORPHIC_FLARE_STRENGTH = 0.8 
+        self.ANAMORPHIC_FLARE_STRENGTH = 0.8
         self.VIGNETTE_STRENGTH, self.GRAIN_INTENSITY = 0.4, 0.02
-        
-        
         self.GRID_R, self.GRID_THETA, self.GRID_Y = 512, 1024, 128
         self.CYLINDER_MIN_RADIUS = self.DISK_INNER_RADIUS
         self.CYLINDER_MAX_RADIUS = self.DISK_OUTER_RADIUS
@@ -56,12 +87,11 @@ class InterstellarRenderer:
         self.DR = (self.CYLINDER_MAX_RADIUS - self.CYLINDER_MIN_RADIUS) / self.GRID_R
         self.DTHETA = (2 * math.pi) / self.GRID_THETA
         self.DY = (2 * self.CYLINDER_HALF_HEIGHT) / self.GRID_Y
-
         self.VOLUME_SUBSTEPS = 256
-        self.EMISSION_STRENGTH = 1200.0         
-        self.ABSORPTION_COEFFICIENT = 50.0      
+        self.EMISSION_STRENGTH = 1200.0
+        self.ABSORPTION_COEFFICIENT = 50.0
         self.DENSITY_MULTIPLIER = 1.5
-        self.DENSITY_POW = 3.0                  
+        self.DENSITY_POW = 3.0
         self.SCATTERING_STRENGTH = 40.0
         self.HG_ASYMMETRY_FACTOR = 0.4
         self.SELF_SHADOW_STRENGTH = 0.8
@@ -71,32 +101,31 @@ class InterstellarRenderer:
         self.WARP_FIELD_SCALE, self.WARP_STRENGTH = 1.5, 1.2
         self.FILAMENT_NOISE_SCALE = 1.8
         self.FILAMENT_CONTRAST = 4.0
-        self.TANGENTIAL_STRETCH = 25.0          
+        self.TANGENTIAL_STRETCH = 25.0
         self.CLUMP_NOISE_SCALE = 0.5
         self.CLUMP_STRENGTH = 0.6
         self.VERTICAL_NOISE_SCALE = 2.0
         self.VERTICAL_STRENGTH = 0.6
         self.DISK_NOISE_STRENGTH = 3.0
-        self.EQUATORIAL_SHADOW_WIDTH = 0.1      
-        self.EQUATORIAL_SHADOW_STRENGTH = 0.9   
-        self.DT_SIM = 0.005  
-        self.ADVECTION_STRENGTH = 1e-5 
-        self.MAX_VELOCITY_PHYSICAL = 2.0 * self.DR / self.DT_SIM 
+        self.EQUATORIAL_SHADOW_WIDTH = 0.1
+        self.EQUATORIAL_SHADOW_STRENGTH = 0.9
+        self.DT_SIM = 0.005
+        self.ADVECTION_STRENGTH = 1e-5
+        self.MAX_VELOCITY_PHYSICAL = 2.0 * self.DR / self.DT_SIM
         self.JACOBI_ITERATIONS = 100
         self.DISSIPATION = 0.03
         self.ORBITAL_ASSIST_STRENGTH = 0.03
         self.ORBITAL_VELOCITY_SCALE = 1.0
         self.GRAVITY_STRENGTH = 1.0
-        
+
         self.pixels = ti.Vector.field(3, dtype=ti.f32, shape=self.RESOLUTION)
         skybox_img_np = ti.tools.image.imread('starmap.jpg').astype(np.float32) / 255.0
         self.skybox_texture = ti.Vector.field(3, dtype=ti.f32, shape=skybox_img_np.shape[:2])
         self.skybox_texture.from_numpy(skybox_img_np)
-
         self.grid_shape = (self.GRID_R, self.GRID_THETA, self.GRID_Y)
         self.density_field = ti.field(dtype=ti.f32, shape=self.grid_shape)
         self.new_density_field = ti.field(dtype=ti.f32, shape=self.grid_shape)
-        self.velocity_field = ti.Vector.field(3, dtype=ti.f32, shape=self.grid_shape) 
+        self.velocity_field = ti.Vector.field(3, dtype=ti.f32, shape=self.grid_shape)
         self.new_velocity_field = ti.Vector.field(3, dtype=ti.f32, shape=self.grid_shape)
         self.pressure_field = ti.field(dtype=ti.f32, shape=self.grid_shape)
         self.divergence_field = ti.field(dtype=ti.f32, shape=self.grid_shape)
@@ -105,48 +134,175 @@ class InterstellarRenderer:
         self.gui = None
         if self.show_gui:
             self.gui = ti.GUI("Cinematic Black Hole Flight", res=self.RESOLUTION, fast_gui=True)
-
+            
+        self._temp_dir_obj = None
         self.video_manager = None
         if self.save_video:
-            self.temp_video_dir = "temp_video_frames"
-            os.makedirs(self.temp_video_dir, exist_ok=True)
-            self.video_manager = ti.tools.VideoManager(output_dir=self.temp_video_dir, framerate=video_fps, automatic_build=False)
+            self._temp_dir_obj = tempfile.TemporaryDirectory()
+            temp_video_dir = self._temp_dir_obj.name
+            console.print(f"[dim]Video frames will be temporarily stored in: {temp_video_dir}[/dim]")
+            self.video_manager = ti.tools.VideoManager(output_dir=temp_video_dir, framerate=video_fps, automatic_build=False)
             self.final_video_path = save_video_path
+        
+        self.cache_dir = "frame_cache"
+        self.config_hash = self._get_config_hash()
+        self.active_cache_dir = os.path.join(self.cache_dir, self.config_hash)
+        if self.use_caching:
+            os.makedirs(self.active_cache_dir, exist_ok=True)
+            text = Text.from_markup(f"[bold green]Frame Caching ENABLED[/bold green]\n[dim]Cache Directory: '{self.active_cache_dir}/'[/dim]")
+            console.print(Panel(text, title="[cyan]Caching Status[/cyan]", border_style="cyan"))
 
         self.reset_scene()
-        print("Renderer Initialized. Cylindrical gas simulation ready.")
+        console.print("[bold]Renderer Initialized. Cylindrical gas simulation ready.[/bold]")
+
+    def _get_config_hash(self):
+        params = {
+            'WIDTH': self.WIDTH, 'HEIGHT': self.HEIGHT, 'GM': self.GM,
+            'DISK_INNER_RADIUS': self.DISK_INNER_RADIUS, 'DISK_OUTER_RADIUS': self.DISK_OUTER_RADIUS,
+            'DISK_HALF_THICKNESS': self.DISK_HALF_THICKNESS, 'SUN_RADIUS': self.SUN_RADIUS,
+            'SUN1_POS': list(self.SUN1_POS), 'SUN1_COLOR': list(self.SUN1_COLOR),
+            'SUN2_POS': list(self.SUN2_POS), 'SUN2_COLOR': list(self.SUN2_COLOR),
+            'SUN_NOISE_SCALE_1': self.SUN_NOISE_SCALE_1, 'SUN_NOISE_SCALE_2': self.SUN_NOISE_SCALE_2,
+            'SUN_NOISE_CONTRAST': self.SUN_NOISE_CONTRAST, 'SUN_BRIGHTNESS_BOOST': self.SUN_BRIGHTNESS_BOOST,
+            'SUN_CORE_BRIGHTNESS': self.SUN_CORE_BRIGHTNESS, 'SUN_GLOW_STRENGTH': self.SUN_GLOW_STRENGTH,
+            'SUN_GLOW_FALLOFF': self.SUN_GLOW_FALLOFF, 'SUN_RAY_NOISE_SCALE': self.SUN_RAY_NOISE_SCALE,
+            'SUN_RAY_STRETCH': self.SUN_RAY_STRETCH, 'SUN_RAY_CONTRAST': self.SUN_RAY_CONTRAST,
+            'MAX_STEPS': self.MAX_STEPS, 'TOLERANCE': self.TOLERANCE, 'DT_INITIAL': self.DT_INITIAL,
+            'DT_MIN': self.DT_MIN, 'DT_MAX': self.DT_MAX, 'SAFETY_FACTOR': self.SAFETY_FACTOR,
+            'FAR_FIELD_RADIUS': self.FAR_FIELD_RADIUS, 'BLOOM_THRESHOLD': self.BLOOM_THRESHOLD,
+            'BLOOM_STRENGTH': self.BLOOM_STRENGTH, 'ANAMORPHIC_FLARE_STRENGTH': self.ANAMORPHIC_FLARE_STRENGTH,
+            'VIGNETTE_STRENGTH': self.VIGNETTE_STRENGTH, 'GRAIN_INTENSITY': self.GRAIN_INTENSITY,
+            'GRID_R': self.GRID_R, 'GRID_THETA': self.GRID_THETA, 'GRID_Y': self.GRID_Y,
+            'VOLUME_SUBSTEPS': self.VOLUME_SUBSTEPS, 'EMISSION_STRENGTH': self.EMISSION_STRENGTH,
+            'ABSORPTION_COEFFICIENT': self.ABSORPTION_COEFFICIENT, 'DENSITY_MULTIPLIER': self.DENSITY_MULTIPLIER,
+            'DENSITY_POW': self.DENSITY_POW, 'SCATTERING_STRENGTH': self.SCATTERING_STRENGTH,
+            'HG_ASYMMETRY_FACTOR': self.HG_ASYMMETRY_FACTOR, 'SELF_SHADOW_STRENGTH': self.SELF_SHADOW_STRENGTH,
+            'DISK_COLOR_HOT': list(self.DISK_COLOR_HOT), 'DISK_COLOR_COLD': list(self.DISK_COLOR_COLD),
+            'DOPPLER_STRENGTH': self.DOPPLER_STRENGTH, 'WARP_FIELD_SCALE': self.WARP_FIELD_SCALE,
+            'WARP_STRENGTH': self.WARP_STRENGTH, 'FILAMENT_NOISE_SCALE': self.FILAMENT_NOISE_SCALE,
+            'FILAMENT_CONTRAST': self.FILAMENT_CONTRAST, 'TANGENTIAL_STRETCH': self.TANGENTIAL_STRETCH,
+            'CLUMP_NOISE_SCALE': self.CLUMP_NOISE_SCALE, 'CLUMP_STRENGTH': self.CLUMP_STRENGTH,
+            'VERTICAL_NOISE_SCALE': self.VERTICAL_NOISE_SCALE, 'VERTICAL_STRENGTH': self.VERTICAL_STRENGTH,
+            'DISK_NOISE_STRENGTH': self.DISK_NOISE_STRENGTH, 'EQUATORIAL_SHADOW_WIDTH': self.EQUATORIAL_SHADOW_WIDTH,
+            'EQUATORIAL_SHADOW_STRENGTH': self.EQUATORIAL_SHADOW_STRENGTH, 'DT_SIM': self.DT_SIM,
+            'ADVECTION_STRENGTH': self.ADVECTION_STRENGTH, 'MAX_VELOCITY_PHYSICAL': self.MAX_VELOCITY_PHYSICAL,
+            'JACOBI_ITERATIONS': self.JACOBI_ITERATIONS, 'DISSIPATION': self.DISSIPATION,
+            'ORBITAL_ASSIST_STRENGTH': self.ORBITAL_ASSIST_STRENGTH, 'ORBITAL_VELOCITY_SCALE': self.ORBITAL_VELOCITY_SCALE,
+            'GRAVITY_STRENGTH': self.GRAVITY_STRENGTH
+        }
+        param_string = json.dumps(params, sort_keys=True).encode('utf-8')
+        return hashlib.sha256(param_string).hexdigest()
+
+    def get_system_stats_str(self):
+        """Returns a compact, color-coded string of system stats for TQDM."""
+        log_parts = []
+        
+        def get_color(percent):
+            if percent < 50: return "green"
+            if percent < 80: return "yellow"
+            return "red"
+
+        if _psutil_available:
+            ram = psutil.virtual_memory()
+            ram_color = get_color(ram.percent)
+            cpu_percent = psutil.cpu_percent()
+            cpu_color = get_color(cpu_percent)
+            log_parts.append(f"CPU: [bold {cpu_color}]{cpu_percent: >4.1f}%[/bold {cpu_color}]")
+            log_parts.append(f"RAM: [bold {ram_color}]{ram.percent: >4.1f}%[/bold {ram_color}]")
+        
+        if _pynvml_available:
+            try:
+                handle = nvmlDeviceGetHandleByIndex(0)
+                mem_info = nvmlDeviceGetMemoryInfo(handle)
+                vram_percent = mem_info.used / mem_info.total * 100
+                vram_color = get_color(vram_percent)
+                log_parts.append(f"VRAM: [bold {vram_color}]{vram_percent: >4.1f}%[/bold {vram_color}]")
+            except NVMLError:
+                log_parts.append("VRAM: [red]N/A[/red]")
+
+        return " | ".join(log_parts)
+
+    def _get_frame_hash(self, cam_pos_vec, cam_fwd_vec, cam_up_vec, fov):
+        """Returns a hash of the current simulation state."""
+        state_string = (
+            f"{self.frame_count}-"
+            f"{cam_pos_vec.x:.4f}-{cam_pos_vec.y:.4f}-{cam_pos_vec.z:.4f}-"
+            f"{cam_fwd_vec.x:.4f}-{cam_fwd_vec.y:.4f}-{cam_fwd_vec.z:.4f}-"
+            f"{cam_up_vec.x:.4f}-{cam_up_vec.y:.4f}-{cam_up_vec.z:.4f}-"
+            f"{fov:.4f}"
+        )
+        return hashlib.sha256(state_string.encode()).hexdigest()
 
     def reset_scene(self):
-        print("Resetting gas simulation to initial state...")
+        console.print("[dim]Resetting gas simulation to initial state...[/dim]")
         self.init_scene()
         self.init_velocity()
 
     def step(self, cam_pos_vec, cam_fwd_vec, cam_up_vec, fov):
-        self.simulation_step()
-        fwd, up = cam_fwd_vec.normalized(), cam_up_vec.normalized()
-        right = fwd.cross(up).normalized(); up = right.cross(fwd)
-        self.cam_to_world_matrix[None] = ti.Matrix.cols([right, up, fwd])
-        self.render(cam_pos_vec, self.cam_to_world_matrix[None], fov)
+        """Renders one frame and returns cache status."""
+        self.frame_count += 1
+        self.simulation_step() 
+        
+        cache_hit = False
+        if self.use_caching:
+            frame_hash = self._get_frame_hash(cam_pos_vec, cam_fwd_vec, cam_up_vec, fov)
+            cache_path = os.path.join(self.active_cache_dir, f"{frame_hash}.png")
+            
+            if os.path.exists(cache_path):
+                cached_frame_np = ti.tools.image.imread(cache_path).astype(np.float32) / 255.0
+                if self.save_video and self.video_manager:
+                    self.video_manager.write_frame(cached_frame_np)
+                self.pixels.from_numpy(cached_frame_np)
+                cache_hit = True
+        
+        if not cache_hit:
+            fwd, up = cam_fwd_vec.normalized(), cam_up_vec.normalized()
+            right = fwd.cross(up).normalized(); up = right.cross(fwd)
+            self.cam_to_world_matrix[None] = ti.Matrix.cols([right, up, fwd])
+            self.render(cam_pos_vec, self.cam_to_world_matrix[None], fov)
+            
+            if self.save_video or self.use_caching:
+                frame_numpy = self.pixels.to_numpy()
+                if self.save_video and self.video_manager:
+                    self.video_manager.write_frame(frame_numpy)
+                if self.use_caching:
+                    ti.tools.image.imwrite(frame_numpy, cache_path)
+
         if self.show_gui and self.gui: self.gui.set_image(self.pixels); self.gui.show()
-        if self.save_video and self.video_manager: self.video_manager.write_frame(self.pixels.to_numpy())
+        
+        return "cache_hit" if cache_hit else "cache_miss"
 
     def close(self):
         if self.video_manager:
-            print("Finalizing video...")
-            self.video_manager.make_video(gif=False, mp4=True)
-            default_output = os.path.join(self.temp_video_dir, "video.mp4")
-            for attempt in range(10):
+            spinner_text = Text.from_markup("[bold green]Finalizing video... This may take a moment.[/bold green]")
+            status_context = console.status(spinner_text, spinner="dots") if _rich_available else open(os.devnull, 'w')
+            
+            with status_context:
                 try:
-                    if os.path.exists(default_output):
-                        os.replace(default_output, self.final_video_path)
-                        print(f"Video saved to {self.final_video_path}")
-                        break
-                except PermissionError:
-                    if attempt < 9: time.sleep(0.5)
-                    else: print(f"FATAL: Could not move video file. It may be at {default_output}"); raise
+                    self.video_manager.make_video(gif=False, mp4=True)
+                    default_output = os.path.join(self._temp_dir_obj.name, "video.mp4")
+                    for attempt in range(10):
+                        try:
+                            if os.path.exists(default_output):
+                                os.replace(default_output, self.final_video_path)
+                                break
+                        except PermissionError:
+                            if attempt < 9: time.sleep(0.5)
+                            else: raise
+                finally:
+                    if self._temp_dir_obj:
+                        self._temp_dir_obj.cleanup()
+
+            final_text = Text.from_markup(f"[bold green]✓ Video saved to [cyan]'{self.final_video_path}'[/cyan][/bold green]\n[dim]Temporary directory cleaned up.[/dim]")
+            console.print(Panel(final_text, title="[magenta]Render Complete[/magenta]", border_style="magenta"))
+
         if self.gui: self.gui.close()
-        print("Renderer closed.")
         
+        if _pynvml_available:
+            nvmlShutdown()
+
+        console.print("[bold]Renderer closed.[/bold]")
+
     @ti.func
     def sample_texture(self, texture: ti.template(), u: ti.f32, v: ti.f32):  #type: ignore
         shape = ti.Vector([texture.shape[1], texture.shape[0]])
@@ -260,8 +416,7 @@ class InterstellarRenderer:
             force_theta = total_force_world.dot(ti.Vector([-sin_t, 0.0, cos_t]))
             force_y = total_force_world.y
             self.velocity_field[i, j, k] += ti.Vector([force_r, force_theta, force_y]) * self.DT_SIM
-            
-    
+
     @ti.kernel
     def clamp_velocity(self):
         for i, j, k in self.velocity_field:

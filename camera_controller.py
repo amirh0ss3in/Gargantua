@@ -1,12 +1,33 @@
 import time
 import math
 import taichi as ti
+import textwrap
 from interstellar_renderer import InterstellarRenderer
+
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.text import Text
+    _rich_available = True
+    console = Console()
+except ImportError:
+    _rich_available = False
+    class _DummyConsole:
+        def print(self, text): print(text)
+    console = _DummyConsole()
+
+try:
+    from tqdm import tqdm
+    _tqdm_available = True
+except ImportError:
+    _tqdm_available = False
+
 
 def main():
     """
-    Initializes the renderer and runs a scripted camera animation loop,
-    with options to either display in a GUI or render to a video file.
+    Initializes the renderer and runs a scripted camera animation loop.
+    For offline rendering, it provides a detailed, color-coded progress bar.
+    For real-time mode, it displays the animation in a GUI.
     """
     # --- 1. RENDER CONFIGURATION ---
     # -- Choose your mode --
@@ -19,25 +40,37 @@ def main():
     SAVE_VIDEO = True
 
     # -- Video settings (only used if SAVE_VIDEO is True) --
-    VIDEO_DURATION_SECONDS = 60  # How long the final video should be. NOTE: change this and the fps to 60 for the full movie
-    VIDEO_FPS = 30               # Frames per second
+    VIDEO_DURATION_SECONDS = 10
+    VIDEO_FPS = 24
     OUTPUT_FILENAME = "interstellar_flight.mp4"
+
+    # -- Render Quality --
+    # Low (for quick previews): 960
+    # Medium (good balance): 1280
+    # High (final render): 1920
+    RENDER_WIDTH = 1280
 
     # 2. Initialize the scene renderer with the chosen configuration.
     scene = InterstellarRenderer(
         show_gui=SHOW_GUI,
         save_video_path=OUTPUT_FILENAME if SAVE_VIDEO else None,
         video_fps=VIDEO_FPS,
-        width=1920
+        width=RENDER_WIDTH,
+        use_caching=True
     )
     
     # 3. Main application loop
     if SAVE_VIDEO:
-        # --- OFFLINE RENDER LOOP ---
+        # --- OFFLINE RENDER LOOP (with TQDM progress bar) ---
         total_frames = int(VIDEO_DURATION_SECONDS * VIDEO_FPS)
-        print(f"Starting offline render of {total_frames} frames to {OUTPUT_FILENAME}...")
+        console.print(f"\n[bold magenta]Starting offline render of {total_frames} frames to '{OUTPUT_FILENAME}'...[/bold magenta]\n")
         
-        for frame in range(total_frames):
+        cache_hits, cache_misses = 0, 0
+        total_render_time = 0.0
+
+        progress_bar = tqdm(range(total_frames), desc="Initializing...", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]") if _tqdm_available else range(total_frames)
+
+        for frame in progress_bar:
             start_frame_time = time.time()
             
             # Calculate animation time based on frame number for deterministic output
@@ -46,13 +79,25 @@ def main():
             # Get camera vectors for the current time
             cam_pos, cam_fwd, world_up, fov = get_camera_vectors_at_time(animation_time)
             
-            # Render the frame
-            scene.step(cam_pos, cam_fwd, world_up, fov)
+            # Render the frame and get cache status
+            status = scene.step(cam_pos, cam_fwd, world_up, fov)
             
-            # Progress report
-            end_frame_time = time.time()
-            frame_duration = end_frame_time - start_frame_time
-            print(f"  - Rendered frame {frame + 1}/{total_frames} in {frame_duration:.2f}s")
+            frame_duration = time.time() - start_frame_time
+            total_render_time += frame_duration
+            
+            if status == 'cache_hit':
+                cache_hits += 1
+            else:
+                cache_misses += 1
+            
+            # Update the rich progress bar
+            if _tqdm_available and _rich_available:
+                stats_str = scene.get_system_stats_str()
+                cache_str = f"Cache: [bold green]{cache_hits}[/bold green] hit, [bold red]{cache_misses}[/bold red] miss"
+                progress_bar.set_description_str(Text.from_markup(f"[cyan]Rendering Frame {frame+1}/{total_frames}[/cyan]"))
+                progress_bar.set_postfix_str(Text.from_markup(f"Last: {frame_duration:.2f}s | {cache_str} | {stats_str}"), refresh=True)
+            elif _tqdm_available: # Fallback for no rich
+                progress_bar.set_postfix_str(f"Last: {frame_duration:.2f}s, Hits: {cache_hits}, Misses: {cache_misses}")
 
     else:
         # --- REAL-TIME GUI LOOP ---
@@ -72,10 +117,22 @@ def main():
             # Render and display the frame
             scene.step(cam_pos, cam_fwd, world_up, fov)
 
-    # 4. Clean up and finalize resources
+    # 4. Clean up and finalize resources (this now handles printing the final video path)
     scene.close()
-    if SAVE_VIDEO:
-        print(f"Video saved successfully to {OUTPUT_FILENAME}")
+
+    # 5. Print final summary for offline renders
+    if SAVE_VIDEO and _rich_available:
+        summary_text = Text.from_markup(textwrap.dedent(f"""\
+            [bold]Total Frames:[/bold]   {total_frames}
+            [bold]Total Time:[/bold]     {total_render_time:.2f} seconds
+            [bold]Average Time:[/bold]   {total_render_time/total_frames:.2f} s/frame
+            
+            [bold]Cache Hits:[/bold]     [green]{cache_hits}[/green]
+            [bold]Cache Misses:[/bold]   [red]{cache_misses}[/red]
+            [bold]Cache Hit Rate:[/bold] [cyan]{(cache_hits / total_frames * 100):.1f}%[/cyan]
+        """))
+        console.print(Panel(summary_text, title="[bold blue]Render Summary[/bold blue]", border_style="blue"))
+
 
 def get_camera_vectors_at_time(animation_time):
     """

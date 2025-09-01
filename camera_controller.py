@@ -39,7 +39,7 @@ def main():
     VIDEO_FPS = 60
     OUTPUT_FILENAME = "interstellar_flight.mp4"
 
-    RENDER_WIDTH = 1980
+    RENDER_WIDTH = 1920
 
     # 2. Initialize the scene renderer
     scene = InterstellarRenderer(

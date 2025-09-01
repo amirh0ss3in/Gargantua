@@ -79,7 +79,7 @@ class InterstellarRenderer:
         self.SUN_BRIGHTNESS_BOOST, self.SUN_CORE_BRIGHTNESS = 2.0, 10.0
         self.SUN_GLOW_STRENGTH, self.SUN_GLOW_FALLOFF = 0.1, 0.2
         self.SUN_RAY_NOISE_SCALE, self.SUN_RAY_STRETCH, self.SUN_RAY_CONTRAST = 0.9, 500.0, 9.0
-        self.MAX_STEPS = 2000
+        self.MAX_STEPS = 1000
         self.TOLERANCE, self.DT_INITIAL, self.DT_MIN, self.DT_MAX = 1.0e-5, 0.5, 1.0e-4, 1.0
         self.SAFETY_FACTOR = 0.9
         self.FAR_FIELD_RADIUS = 75.0

@@ -1,0 +1,6 @@
+taichi
+numpy
+rich
+tqdm
+psutil
+pynvml

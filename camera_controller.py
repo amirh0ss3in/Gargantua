@@ -19,8 +19,8 @@ def main():
     SAVE_VIDEO = True
 
     # -- Video settings (only used if SAVE_VIDEO is True) --
-    VIDEO_DURATION_SECONDS = 60  # How long the final video should be
-    VIDEO_FPS = 60               # Frames per second
+    VIDEO_DURATION_SECONDS = 1  # How long the final video should be. NOTE: change this and the fps to 60 for the full movie
+    VIDEO_FPS = 1               # Frames per second
     OUTPUT_FILENAME = "interstellar_flight.mp4"
 
     # 2. Initialize the scene renderer with the chosen configuration.

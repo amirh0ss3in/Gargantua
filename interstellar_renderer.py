@@ -24,7 +24,7 @@ class InterstellarRenderer:
         
         self.DISK_INNER_RADIUS = self.SCHWARZSCHILD_RADIUS * 2.5
         self.DISK_OUTER_RADIUS = self.SCHWARZSCHILD_RADIUS * 12.0
-        self.DISK_HALF_THICKNESS = (self.DISK_OUTER_RADIUS - self.DISK_INNER_RADIUS) * 0.1
+        self.DISK_HALF_THICKNESS = (self.DISK_OUTER_RADIUS - self.DISK_INNER_RADIUS) * 0.005
         
         
         self.SUN_RADIUS = 3.0
@@ -44,35 +44,35 @@ class InterstellarRenderer:
         self.FAR_FIELD_RADIUS = 75.0
         
         
-        self.BLOOM_THRESHOLD, self.BLOOM_STRENGTH = 0.4, 0.05
-        self.ANAMORPHIC_FLARE_STRENGTH = 0.1
-        self.VIGNETTE_STRENGTH, self.GRAIN_INTENSITY = 0.2, 0.015
+        self.BLOOM_THRESHOLD, self.BLOOM_STRENGTH = 0.3, 0.15
+        self.ANAMORPHIC_FLARE_STRENGTH = 0.8 
+        self.VIGNETTE_STRENGTH, self.GRAIN_INTENSITY = 0.4, 0.02
         
         
-        self.GRID_R, self.GRID_THETA, self.GRID_Y = 1024, 2048, 32
+        self.GRID_R, self.GRID_THETA, self.GRID_Y = 512, 1024, 128
         self.CYLINDER_MIN_RADIUS = self.DISK_INNER_RADIUS
         self.CYLINDER_MAX_RADIUS = self.DISK_OUTER_RADIUS
-        self.CYLINDER_HALF_HEIGHT = self.DISK_HALF_THICKNESS * 2.0
+        self.CYLINDER_HALF_HEIGHT = self.DISK_HALF_THICKNESS * 5.0
         self.DR = (self.CYLINDER_MAX_RADIUS - self.CYLINDER_MIN_RADIUS) / self.GRID_R
         self.DTHETA = (2 * math.pi) / self.GRID_THETA
         self.DY = (2 * self.CYLINDER_HALF_HEIGHT) / self.GRID_Y
 
-        self.VOLUME_SUBSTEPS = 2
-        self.EMISSION_STRENGTH = 200.0
+        self.VOLUME_SUBSTEPS = 256
+        self.EMISSION_STRENGTH = 450.0
         self.ABSORPTION_COEFFICIENT = 25.0
         self.DENSITY_MULTIPLIER = 1.5
         self.DENSITY_POW = 5.0
         self.SCATTERING_STRENGTH = 40.0
         self.HG_ASYMMETRY_FACTOR = 0.4
         self.SELF_SHADOW_STRENGTH = 0.8
-        self.DISK_COLOR_HOT = ti.Vector([1.0, 0.9, 0.7])
-        self.DISK_COLOR_COLD = ti.Vector([1.0, 0.5, 0.2])
-        self.DOPPLER_STRENGTH = 4.0
+        self.DISK_COLOR_HOT = ti.Vector([1.0, 1.0, 0.95])
+        self.DISK_COLOR_COLD = ti.Vector([1.0, 0.4, 0.1])
+        self.DOPPLER_STRENGTH = 6.0
         
         
         self.BASE_STRUCTURE_SCALE, self.WARP_FIELD_SCALE, self.WARP_STRENGTH = 0.9, 0.9, 1.8
         self.FILAMENT_NOISE_SCALE, self.FILAMENT_CONTRAST = 1.2, 3.0
-        self.DETAIL_NOISE_SCALE, self.DETAIL_STRENGTH, self.DISK_NOISE_STRENGTH = 60.0, 0.5, 1.5
+        self.DETAIL_NOISE_SCALE, self.DETAIL_STRENGTH, self.DISK_NOISE_STRENGTH = 30.0, 0.3, 1.5
         
         
         self.DT_SIM = 0.005  
@@ -326,6 +326,7 @@ class InterstellarRenderer:
     def init_scene(self):
         for i, j, k in self.density_field:
             pos_world = self.grid_to_world_cylindrical(i, j, k)
+            base_noise = ti.pow(self.fbm_ridged_3d(pos_world * self.BASE_STRUCTURE_SCALE), 1.5)
             radius_xz, height_y = pos_world.xz.norm(), pos_world.y
             falloff_y = ti.math.smoothstep(self.DISK_HALF_THICKNESS, self.DISK_HALF_THICKNESS*0.8, abs(height_y))
             falloff_in = ti.math.smoothstep(self.DISK_INNER_RADIUS, self.DISK_INNER_RADIUS*1.2, radius_xz)
@@ -334,8 +335,9 @@ class InterstellarRenderer:
             warp_coords = pos_world * self.WARP_FIELD_SCALE
             warp_vec = ti.Vector([self.fbm_ridged_3d(warp_coords+13.7), self.fbm_ridged_3d(warp_coords+24.2), self.fbm_ridged_3d(warp_coords+19.1)])
             warped_pos = pos_world + (warp_vec - 0.5) * 2.0 * self.WARP_STRENGTH
-            base_noise = ti.pow(self.fbm_ridged_3d(pos_world * self.BASE_STRUCTURE_SCALE), 1.5)
-            filament_noise = ti.pow(self.fbm_ridged_3d(warped_pos * self.FILAMENT_NOISE_SCALE), self.FILAMENT_CONTRAST)
+            stretch_factor = 20.0
+            stretched_filament_coords = warped_pos * ti.Vector([1.0, stretch_factor, 1.0]) * self.FILAMENT_NOISE_SCALE
+            filament_noise = ti.pow(self.fbm_ridged_3d(stretched_filament_coords), self.FILAMENT_CONTRAST)
             detail_noise = ti.math.mix(1.0 - self.DETAIL_STRENGTH, 1.0 + self.DETAIL_STRENGTH, self.value_noise_3d(pos_world * self.DETAIL_NOISE_SCALE))
             final_density = base_density_canvas * base_noise * filament_noise * detail_noise * self.DISK_NOISE_STRENGTH
             self.density_field[i, j, k] = ti.max(0.0, final_density)
@@ -383,8 +385,10 @@ class InterstellarRenderer:
         r = pos_world.xz.norm()
         density = 0.0
         if self.CYLINDER_MIN_RADIUS < r < self.CYLINDER_MAX_RADIUS and abs(pos_world.y) < self.CYLINDER_HALF_HEIGHT:
-            pos_grid = self.world_to_grid_cylindrical(pos_world)
-            density = self.sample_cylindrical_grid(self.density_field, pos_grid)
+            vertical_falloff = ti.exp(- (pos_world.y * pos_world.y) / (2.0 * self.DISK_HALF_THICKNESS**2))
+            pos_grid_2d_slice = self.world_to_grid_cylindrical(ti.Vector([pos_world.x, 0.0, pos_world.z]))
+            density_from_grid = self.sample_cylindrical_grid(self.density_field, pos_grid_2d_slice)
+            density = density_from_grid * vertical_falloff            
         return density
 
     @ti.func

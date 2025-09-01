@@ -58,23 +58,27 @@ class InterstellarRenderer:
         self.DY = (2 * self.CYLINDER_HALF_HEIGHT) / self.GRID_Y
 
         self.VOLUME_SUBSTEPS = 256
-        self.EMISSION_STRENGTH = 450.0
-        self.ABSORPTION_COEFFICIENT = 25.0
+        self.EMISSION_STRENGTH = 1200.0         
+        self.ABSORPTION_COEFFICIENT = 50.0      
         self.DENSITY_MULTIPLIER = 1.5
-        self.DENSITY_POW = 5.0
+        self.DENSITY_POW = 3.0                  
         self.SCATTERING_STRENGTH = 40.0
         self.HG_ASYMMETRY_FACTOR = 0.4
         self.SELF_SHADOW_STRENGTH = 0.8
         self.DISK_COLOR_HOT = ti.Vector([1.0, 1.0, 0.95])
         self.DISK_COLOR_COLD = ti.Vector([1.0, 0.4, 0.1])
-        self.DOPPLER_STRENGTH = 6.0
-        
-        
-        self.BASE_STRUCTURE_SCALE, self.WARP_FIELD_SCALE, self.WARP_STRENGTH = 0.9, 0.9, 1.8
-        self.FILAMENT_NOISE_SCALE, self.FILAMENT_CONTRAST = 1.2, 3.0
-        self.DETAIL_NOISE_SCALE, self.DETAIL_STRENGTH, self.DISK_NOISE_STRENGTH = 30.0, 0.3, 1.5
-        
-        
+        self.DOPPLER_STRENGTH = 7.0
+        self.WARP_FIELD_SCALE, self.WARP_STRENGTH = 1.5, 1.2
+        self.FILAMENT_NOISE_SCALE = 1.8
+        self.FILAMENT_CONTRAST = 4.0
+        self.TANGENTIAL_STRETCH = 25.0          
+        self.CLUMP_NOISE_SCALE = 0.5
+        self.CLUMP_STRENGTH = 0.6
+        self.VERTICAL_NOISE_SCALE = 2.0
+        self.VERTICAL_STRENGTH = 0.6
+        self.DISK_NOISE_STRENGTH = 3.0
+        self.EQUATORIAL_SHADOW_WIDTH = 0.1      
+        self.EQUATORIAL_SHADOW_STRENGTH = 0.9   
         self.DT_SIM = 0.005  
         self.ADVECTION_STRENGTH = 1e-5 
         self.MAX_VELOCITY_PHYSICAL = 2.0 * self.DR / self.DT_SIM 
@@ -83,7 +87,6 @@ class InterstellarRenderer:
         self.ORBITAL_ASSIST_STRENGTH = 0.03
         self.ORBITAL_VELOCITY_SCALE = 1.0
         self.GRAVITY_STRENGTH = 1.0
-        
         
         self.pixels = ti.Vector.field(3, dtype=ti.f32, shape=self.RESOLUTION)
         skybox_img_np = ti.tools.image.imread('starmap.jpg').astype(np.float32) / 255.0
@@ -145,7 +148,7 @@ class InterstellarRenderer:
         print("Renderer closed.")
         
     @ti.func
-    def sample_texture(self, texture: ti.template(), u: ti.f32, v: ti.f32): #type: ignore
+    def sample_texture(self, texture: ti.template(), u: ti.f32, v: ti.f32):  #type: ignore
         shape = ti.Vector([texture.shape[1], texture.shape[0]])
         p = ti.Vector([u, v]) * shape; i = ti.cast(ti.floor(p), ti.i32); f = ti.math.fract(p)
         i0 = ti.max(0, ti.min(shape - 1, i)); i1 = ti.max(0, ti.min(shape - 1, i + 1))
@@ -225,13 +228,13 @@ class InterstellarRenderer:
         return ti.Vector([i - dr_grid, j - d_theta_grid, k - dy_grid])
 
     @ti.kernel
-    def advect_density(self, field_in: ti.template(), field_out: ti.template()): #type: ignore
+    def advect_density(self, field_in: ti.template(), field_out: ti.template()):  #type: ignore
         for i, j, k in field_in:
             p_prev = self.backtrace_cylindrical(i, j, k)
             field_out[i,j,k] = self.sample_cylindrical_grid(field_in, p_prev)
     
     @ti.kernel
-    def advect_velocity(self, field_in: ti.template(), field_out: ti.template()): #type: ignore
+    def advect_velocity(self, field_in: ti.template(), field_out: ti.template()):  #type: ignore
         for i, j, k in field_in:
             p_prev = self.backtrace_cylindrical(i, j, k)
             sampled_val = self.sample_cylindrical_grid(field_in, p_prev)
@@ -286,7 +289,7 @@ class InterstellarRenderer:
             else: self.divergence_field[i,j,k] = 0.0; self.pressure_field[i,j,k] = 0.0
                 
     @ti.kernel
-    def solve_pressure_red_black(self, is_red_pass: ti.i32): #type: ignore
+    def solve_pressure_red_black(self, is_red_pass: ti.i32):  #type: ignore
         for i, j, k in self.pressure_field:
             if i > 0 and i < self.GRID_R-1 and k > 0 and k < self.GRID_Y-1 and (i + j + k) % 2 == is_red_pass:
                 pr = self.pressure_field[i+1, j, k]; pl = self.pressure_field[i-1, j, k]
@@ -326,22 +329,38 @@ class InterstellarRenderer:
     def init_scene(self):
         for i, j, k in self.density_field:
             pos_world = self.grid_to_world_cylindrical(i, j, k)
-            base_noise = ti.pow(self.fbm_ridged_3d(pos_world * self.BASE_STRUCTURE_SCALE), 1.5)
-            radius_xz, height_y = pos_world.xz.norm(), pos_world.y
-            falloff_y = ti.math.smoothstep(self.DISK_HALF_THICKNESS, self.DISK_HALF_THICKNESS*0.8, abs(height_y))
-            falloff_in = ti.math.smoothstep(self.DISK_INNER_RADIUS, self.DISK_INNER_RADIUS*1.2, radius_xz)
-            falloff_out = ti.math.smoothstep(self.DISK_OUTER_RADIUS, self.DISK_OUTER_RADIUS*0.8, radius_xz)
-            base_density_canvas = falloff_y * falloff_in * falloff_out
+            radius_xz = pos_world.xz.norm()           
+            vertical_noise_pos = pos_world * self.VERTICAL_NOISE_SCALE
+            vertical_mod = 1.0 + (self.fbm_ridged_3d(vertical_noise_pos) - 0.5) * 2.0 * self.VERTICAL_STRENGTH
+            modulated_half_thickness = self.DISK_HALF_THICKNESS * vertical_mod
+            falloff_y = ti.math.smoothstep(modulated_half_thickness, modulated_half_thickness * 0.7, abs(pos_world.y))
+            falloff_in = ti.math.smoothstep(self.DISK_INNER_RADIUS, self.DISK_INNER_RADIUS * 1.2, radius_xz)
+            falloff_out = ti.math.smoothstep(self.DISK_OUTER_RADIUS, self.DISK_OUTER_RADIUS * 0.8, radius_xz)
+            base_density_canvas = falloff_y * falloff_in * falloff_out          
             warp_coords = pos_world * self.WARP_FIELD_SCALE
-            warp_vec = ti.Vector([self.fbm_ridged_3d(warp_coords+13.7), self.fbm_ridged_3d(warp_coords+24.2), self.fbm_ridged_3d(warp_coords+19.1)])
+            warp_vec = ti.Vector([
+                self.fbm_ridged_3d(warp_coords + 13.7),
+                self.fbm_ridged_3d(warp_coords + 24.2),
+                self.fbm_ridged_3d(warp_coords + 19.1)
+            ])
             warped_pos = pos_world + (warp_vec - 0.5) * 2.0 * self.WARP_STRENGTH
-            stretch_factor = 20.0
-            stretched_filament_coords = warped_pos * ti.Vector([1.0, stretch_factor, 1.0]) * self.FILAMENT_NOISE_SCALE
-            filament_noise = ti.pow(self.fbm_ridged_3d(stretched_filament_coords), self.FILAMENT_CONTRAST)
-            detail_noise = ti.math.mix(1.0 - self.DETAIL_STRENGTH, 1.0 + self.DETAIL_STRENGTH, self.value_noise_3d(pos_world * self.DETAIL_NOISE_SCALE))
-            final_density = base_density_canvas * base_noise * filament_noise * detail_noise * self.DISK_NOISE_STRENGTH
+            theta = ti.atan2(warped_pos.z, warped_pos.x)
+            cos_t, sin_t = ti.cos(theta), ti.sin(theta)
+            radial_dir = ti.Vector([cos_t, 0.0, sin_t])
+            tangential_dir = ti.Vector([-sin_t, 0.0, cos_t])
+            vertical_dir = ti.Vector([0.0, 1.0, 0.0])
+            local_coords = ti.Vector([
+                warped_pos.dot(radial_dir),
+                warped_pos.dot(tangential_dir),
+                warped_pos.dot(vertical_dir)
+            ])
+            filament_coords = local_coords * ti.Vector([1.0, self.TANGENTIAL_STRETCH, 1.0]) * self.FILAMENT_NOISE_SCALE
+            filament_noise = ti.pow(self.fbm_ridged_3d(filament_coords), self.FILAMENT_CONTRAST)
+            clump_coords = local_coords * self.CLUMP_NOISE_SCALE
+            clump_noise = self.fbm_ridged_3d(clump_coords)
+            combined_noise = ti.math.mix(filament_noise, clump_noise, self.CLUMP_STRENGTH)
+            final_density = base_density_canvas * combined_noise * self.DISK_NOISE_STRENGTH
             self.density_field[i, j, k] = ti.max(0.0, final_density)
-
     @ti.kernel
     def init_velocity(self):
         for i, j, k in self.velocity_field:
@@ -393,14 +412,22 @@ class InterstellarRenderer:
 
     @ti.func
     def get_disk_emission_properties(self, pos_world, ray_dir):
-        radius_xz = pos_world.xz.norm(); temp_factor = ti.pow(self.DISK_INNER_RADIUS / (radius_xz + 1e-6), 2.5)
-        base_color = ti.math.mix(self.DISK_COLOR_COLD, self.DISK_COLOR_HOT, ti.math.clamp(temp_factor * 0.5, 0.0, 1.0))
+        radius_xz = pos_world.xz.norm()
+        temp_factor = ti.pow(self.DISK_INNER_RADIUS / (radius_xz + 1e-6), 2.5)
+        temp_mapped = ti.pow(ti.math.clamp(temp_factor, 0.0, 1.0), 0.8)
+        base_color = ti.math.mix(self.DISK_COLOR_COLD, self.DISK_COLOR_HOT, temp_mapped)
         speed = ti.sqrt(self.GM / (radius_xz + 0.1)) * self.ORBITAL_VELOCITY_SCALE
-        tangential_dir = ti.Vector([-pos_world.z, 0.0, pos_world.x]).normalized(); velocity_world = speed * tangential_dir
-        beta = velocity_world.dot(-ray_dir); gamma = 1.0 / ti.sqrt(1.0 - velocity_world.norm_sqr()); delta = 1.0 / (gamma * (1.0 - beta))
-        brightness = temp_factor * ti.pow(delta, self.DOPPLER_STRENGTH); color_shift = ti.Vector([1.0/delta, 1.0, delta])
-        return base_color * color_shift * brightness
-
+        tangential_dir = ti.Vector([-pos_world.z, 0.0, pos_world.x]).normalized()
+        velocity_world = speed * tangential_dir
+        beta = velocity_world.dot(-ray_dir)
+        gamma = 1.0 / ti.sqrt(1.0 - velocity_world.norm_sqr())
+        delta = 1.0 / (gamma * (1.0 - beta))
+        brightness = temp_factor * ti.pow(delta, self.DOPPLER_STRENGTH)
+        color_shift = ti.Vector([1.0/delta, 1.0, delta])
+        shadow_falloff = ti.math.smoothstep(self.EQUATORIAL_SHADOW_WIDTH, 0.0, abs(pos_world.y))
+        shadow_factor = 1.0 - self.EQUATORIAL_SHADOW_STRENGTH * shadow_falloff
+        return base_color * color_shift * brightness * shadow_factor
+        
     @ti.func
     def henyey_greenstein_phase_func(self, cos_theta, g):
         g2 = g * g; return (1.0 - g2) / ti.pow(1.0 + g2 - 2.0 * g * cos_theta, 1.5)
@@ -462,7 +489,7 @@ class InterstellarRenderer:
     def trace_ray(self, ray_origin, ray_dir):
         pos, vel = ray_origin, ray_dir.normalized()
         color, transmittance = ti.Vector([0.0, 0.0, 0.0]), 1.0
-        hit_object, dt, step = 0, self.DT_INITIAL, 0 # NOTE: Do not fucking touch this line.
+        hit_object, dt, step = 0, self.DT_INITIAL, 0 # NOTE: Do not fucking touch this.
         while step < self.MAX_STEPS and hit_object == 0 and transmittance > 1e-3:
             r = pos.norm()
             if r <= self.HORIZON_RADIUS + 0.001: hit_object = 1
@@ -496,7 +523,7 @@ class InterstellarRenderer:
         return (color + bloom + flare) * vignette + grain
 
     @ti.kernel
-    def render(self, cam_pos: ti.types.vector(3, ti.f32), cam_to_world: ti.types.matrix(3, 3, ti.f32), fov_local: ti.f32): #type: ignore
+    def render(self, cam_pos: ti.types.vector(3, ti.f32), cam_to_world: ti.types.matrix(3, 3, ti.f32), fov_local: ti.f32):  #type: ignore
         for i, j in self.pixels:
             u, v = (i - self.WIDTH*0.5)/self.HEIGHT, (j - self.HEIGHT*0.5)/self.HEIGHT
             ray_dir = cam_to_world @ ti.Vector([u, v, fov_local]).normalized()

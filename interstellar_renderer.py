@@ -18,14 +18,14 @@ except ImportError:
     class _DummyConsole:
         def print(self, text): print(text)
     console = _DummyConsole()
-    print("Warning: `rich` not found. Output will be plain. `pip install rich`")
+    print("Warning: `rich` not found. Output will be plain. To improve, run: `pip install rich`")
 
 try:
     from tqdm import tqdm
     _tqdm_available = True
 except ImportError:
     _tqdm_available = False
-    print("Warning: `tqdm` not found. Progress bar will be disabled. `pip install tqdm`")
+    print("Warning: `tqdm` not found. Progress bar will be disabled. To improve, run: `pip install tqdm`")
 
 
 try:
@@ -33,7 +33,10 @@ try:
     _psutil_available = True
 except ImportError:
     _psutil_available = False
-    console.print("[yellow]Warning: `psutil` not found. System RAM/CPU monitoring will be disabled. `pip install psutil`[/yellow]")
+    if _rich_available:
+        console.print("[bold yellow]⚠️ Warning:[/bold yellow] [dim]`psutil` not found. System RAM/CPU monitoring will be disabled. `pip install psutil`[/dim]")
+    else:
+        print("Warning: `psutil` not found. System RAM/CPU monitoring will be disabled.")
 
 try:
     from pynvml import *
@@ -41,7 +44,10 @@ try:
     _pynvml_available = True
 except (ImportError, NVMLError):
     _pynvml_available = False
-    console.print("[yellow]Warning: `pynvml` not found or failed to initialize. NVIDIA GPU monitoring will be disabled. `pip install pynvml`[/yellow]")
+    if _rich_available:
+        console.print("[bold yellow]⚠️ Warning:[/bold yellow] [dim]`pynvml` not found or failed to initialize. NVIDIA GPU monitoring will be disabled. `pip install pynvml`[/dim]")
+    else:
+        print("Warning: `pynvml` not found. NVIDIA GPU monitoring will be disabled.")
 
 
 @ti.data_oriented
@@ -140,7 +146,6 @@ class InterstellarRenderer:
         if self.save_video:
             self._temp_dir_obj = tempfile.TemporaryDirectory()
             temp_video_dir = self._temp_dir_obj.name
-            console.print(f"[dim]Video frames will be temporarily stored in: {temp_video_dir}[/dim]")
             self.video_manager = ti.tools.VideoManager(output_dir=temp_video_dir, framerate=video_fps, automatic_build=False)
             self.final_video_path = save_video_path
         
@@ -149,11 +154,27 @@ class InterstellarRenderer:
         self.active_cache_dir = os.path.join(self.cache_dir, self.config_hash)
         if self.use_caching:
             os.makedirs(self.active_cache_dir, exist_ok=True)
-            text = Text.from_markup(f"[bold green]Frame Caching ENABLED[/bold green]\n[dim]Cache Directory: '{self.active_cache_dir}/'[/dim]")
-            console.print(Panel(text, title="[cyan]Caching Status[/cyan]", border_style="cyan"))
-
+        
+        self._print_init_summary(save_video_path)
         self.reset_scene()
-        console.print("[bold]Renderer Initialized. Cylindrical gas simulation ready.[/bold]")
+
+    def _print_init_summary(self, save_video_path):
+        if not _rich_available:
+            print("--- Renderer Initialized ---")
+            print(f"  Mode: {'GUI Display' if self.show_gui else 'Offline Render'}")
+            print(f"  Resolution: {self.WIDTH}x{self.HEIGHT}")
+            print(f"  Video Output: {save_video_path if self.save_video else 'Disabled'}")
+            print(f"  Caching: {'Enabled' if self.use_caching else 'Disabled'}")
+            return
+
+        settings_text = Text.from_markup(f"""
+[bold]Resolution:[/bold]   {self.WIDTH}x{self.HEIGHT}
+[bold]Mode:[/bold]         {'GUI Display' if self.show_gui else 'Offline Render'}
+[bold]Video Output:[/bold] {f'[cyan]"{save_video_path}"[/cyan]' if self.save_video else '[dim]Disabled[/dim]'}
+[bold]Caching:[/bold]      {f'[green]ENABLED[/green] ([dim]path: {self.active_cache_dir}[/dim])' if self.use_caching else '[yellow]DISABLED[/yellow]'}
+""")
+        console.print(Panel(settings_text, title="[bold blue]Interstellar Renderer Initialized[/bold blue]", subtitle="[dim]Ready to render[/dim]", border_style="blue"))
+
 
     def _get_config_hash(self):
         params = {
@@ -195,6 +216,7 @@ class InterstellarRenderer:
 
     def get_system_stats_str(self):
         """Returns a compact, color-coded string of system stats for TQDM."""
+        if not _rich_available: return ""
         log_parts = []
         
         def get_color(percent):
@@ -207,8 +229,8 @@ class InterstellarRenderer:
             ram_color = get_color(ram.percent)
             cpu_percent = psutil.cpu_percent()
             cpu_color = get_color(cpu_percent)
-            log_parts.append(f"CPU: [bold {cpu_color}]{cpu_percent: >4.1f}%[/bold {cpu_color}]")
-            log_parts.append(f"RAM: [bold {ram_color}]{ram.percent: >4.1f}%[/bold {ram_color}]")
+            log_parts.append(f"💻 CPU: [bold {cpu_color}]{cpu_percent: >4.1f}%[/bold {cpu_color}]")
+            log_parts.append(f"🧠 RAM: [bold {ram_color}]{ram.percent: >4.1f}%[/bold {ram_color}]")
         
         if _pynvml_available:
             try:
@@ -216,7 +238,7 @@ class InterstellarRenderer:
                 mem_info = nvmlDeviceGetMemoryInfo(handle)
                 vram_percent = mem_info.used / mem_info.total * 100
                 vram_color = get_color(vram_percent)
-                log_parts.append(f"VRAM: [bold {vram_color}]{vram_percent: >4.1f}%[/bold {vram_color}]")
+                log_parts.append(f"🎮 VRAM: [bold {vram_color}]{vram_percent: >4.1f}%[/bold {vram_color}]")
             except NVMLError:
                 log_parts.append("VRAM: [red]N/A[/red]")
 
@@ -234,7 +256,10 @@ class InterstellarRenderer:
         return hashlib.sha256(state_string.encode()).hexdigest()
 
     def reset_scene(self):
-        console.print("[dim]Resetting gas simulation to initial state...[/dim]")
+        if _rich_available:
+            console.print("[dim]Resetting gas simulation to initial state...[/dim]")
+        else:
+            print("Resetting gas simulation to initial state...")
         self.init_scene()
         self.init_velocity()
 
@@ -292,9 +317,18 @@ class InterstellarRenderer:
                 finally:
                     if self._temp_dir_obj:
                         self._temp_dir_obj.cleanup()
+            
+            if _rich_available:
+                final_path_abs = os.path.abspath(self.final_video_path)
+                final_text = Text.from_markup(f"""\
+[bold green]✓ Video saved successfully![/bold green]
 
-            final_text = Text.from_markup(f"[bold green]✓ Video saved to [cyan]'{self.final_video_path}'[/cyan][/bold green]\n[dim]Temporary directory cleaned up.[/dim]")
-            console.print(Panel(final_text, title="[magenta]Render Complete[/magenta]", border_style="magenta"))
+[dim]Output file:[/dim] [link=file://{final_path_abs}][cyan]{self.final_video_path}[/cyan][/link]
+""")
+                console.print(Panel(final_text, title="[magenta]Render Complete[/magenta]", border_style="magenta", expand=False))
+            else:
+                print(f"Video saved to '{self.final_video_path}'")
+
 
         if self.gui: self.gui.close()
         
@@ -302,6 +336,17 @@ class InterstellarRenderer:
             nvmlShutdown()
 
         console.print("[bold]Renderer closed.[/bold]")
+    def get_init_panel(self):
+        """Returns a rich Panel summarizing the renderer's configuration."""
+        if not _rich_available:
+            return "" # Return empty string if rich is not installed
+
+        settings_text = Text.from_markup(f"""
+    [bold]Resolution:[/bold]   {self.WIDTH}x{self.HEIGHT}
+    [bold]Mode:[/bold]         {'GUI Display' if self.show_gui else 'Offline Render'}
+    [bold]Caching:[/bold]      {f'[green]ENABLED[/green] ([dim]path: {self.active_cache_dir}[/dim])' if self.use_caching else '[yellow]DISABLED[/yellow]'}
+    """)
+        return Panel(settings_text, title="[bold blue]Interstellar Renderer Initialized[/bold blue]", border_style="blue", expand=False)
 
     @ti.func
     def sample_texture(self, texture: ti.template(), u: ti.f32, v: ti.f32):  #type: ignore

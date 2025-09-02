@@ -1,9 +1,9 @@
 # Gargantua: A Cinematic Black Hole Renderer in Taichi
 
 <p align="center">
-  <img src="./interstellar_flight_480_30fps.gif" 
-       alt="Interstellar Flight Black Hole Demo" 
-       width="480">
+  <a href="./interstellar_flight_480_30fps.gif">
+    <img src="./bh_play.png" alt="Interstellar Flight Black Hole Demo" width="480">
+  </a>
 </p>
 
 A real-time, cinematic renderer for a gravitationally-lensed black hole, inspired by the movie *Interstellar*. This project is built entirely in Python using the [Taichi programming language](https://www.taichi-lang.org/) to achieve high performance on the GPU.
